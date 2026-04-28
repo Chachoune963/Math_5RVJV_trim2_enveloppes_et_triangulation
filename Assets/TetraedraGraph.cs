@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Linq;
 using UnityEngine;
 
 public class Point
@@ -32,6 +33,161 @@ public class TetraedraGraph
     private List<Point> points = new List<Point>();
     private List<Edge> edges = new List<Edge>();
     private List<Face> faces = new List<Face>();
+
+    private bool CheckEdgeExists(Point a, Point b, out Edge foundEdge)
+    {
+        foreach (var edge in edges)
+        {
+            if ((a == edge.a && b == edge.b)
+                || b == edge.a && a == edge.b)
+            {
+                foundEdge = edge;
+                return true;
+            }
+        }
+
+        foundEdge = null;
+        return false;
+    }
+
+    // Util to recalculate edges from existing faces and points
+    private void RebuildEdges()
+    {
+        // Clear all edge data
+        // Faces should update their dead references themselves
+        edges.Clear();
+        foreach (var point in points)
+            point.usedInEdges.Clear();
+        
+        foreach (var face in faces)
+        {
+            Edge edge1;
+            if (CheckEdgeExists(face.a, face.b, out edge1))
+                edge1.f2 = face;
+            else
+            {
+                edge1 = new Edge() { a = face.a, b = face.b, f1 = face };
+                edges.Add(edge1);
+                face.a.usedInEdges.Add(edge1);
+                face.b.usedInEdges.Add(edge1);
+            }
+            face.s1 = edge1;
+            
+            Edge edge2;
+            if (CheckEdgeExists(face.b, face.c, out edge2))
+                edge2.f2 = face;
+            else
+            {
+                edge2 = new Edge() { a = face.b, b = face.c, f1 = face };
+                edges.Add(edge2);
+                face.b.usedInEdges.Add(edge2);
+                face.c.usedInEdges.Add(edge2);
+            }
+            face.s2 = edge2;
+            
+            Edge edge3;
+            if (CheckEdgeExists(face.c, face.a, out edge3))
+                edge3.f2 = face;
+            else
+            {
+                edge3 = new Edge() { a = face.c, b = face.a, f1 = face };
+                edges.Add(edge3);
+                face.c.usedInEdges.Add(edge3);
+                face.a.usedInEdges.Add(edge3);
+            }
+            face.s3 = edge3;
+        }
+    }
+
+    private bool IsVisibleFromPoint(Face face, Point point)
+    {
+        var edge1_vec = face.b.position - face.a.position;
+        var edge2_vec = face.c.position - face.a.position;
+
+        var normal = Vector3.Cross(edge1_vec, edge2_vec);
+        
+        return Vector3.Dot(normal, point.position - face.a.position) > 0;
+    }
+    
+    // The "Horizon" is the set of edges standing between a visible face, and one that's not.
+    // In other words, they're the edges we'll need to connect to our new point.
+    // In the course's words, the horizon are the purple elements and "visited" the blue ones
+    private (List<Edge>, HashSet<Face>) FindHorizon(Point point, Face startFace)
+    {
+        List<Edge> horizon = new List<Edge>();
+        // Keeping track of the visited faces can tell us which faces need to be deleted
+        HashSet<Face> visited = new HashSet<Face>();
+        Stack<Face> toVisit = new Stack<Face>();
+
+        toVisit.Push(startFace);
+
+        while (toVisit.Count > 0)
+        {
+            Face current = toVisit.Pop();
+            if (!visited.Add(current)) continue;
+
+            foreach (var edge in new[] { current.s1, current.s2, current.s3 })
+            {
+                Face neighbor = (edge.f1 == current) ? edge.f2 : edge.f1;
+
+                if (neighbor == null || !IsVisibleFromPoint(neighbor, point))
+                    horizon.Add(edge);
+                else
+                    toVisit.Push(neighbor);
+            }
+        }
+
+        return (horizon, visited);
+    }
+
+    public void AddPoint(Point point)
+    {
+        // First, look if the point is visible by any face in the first place.
+        // If not, that implies the point is inside the convex hull already.
+        Face visibleFace = null;
+        foreach (var face in faces)
+        {
+            if (IsVisibleFromPoint(face, point))
+            {
+                visibleFace = face;
+                break;
+            }
+        }
+        
+        // No visible face was found, point in inside the hull, no need to do anything.
+        if (visibleFace is null)
+            return;
+
+        // Get the horizon and the faces to delete
+        var (horizon, deletedFaces) = FindHorizon(point, visibleFace);
+        
+        // Delete the hidden faces
+        foreach (var face in deletedFaces)
+            faces.Remove(face);
+        
+        // The point now deserves its rightful place in the hull
+        // All hail the point
+        points.Add(point);
+
+        var barycenter = new Point();
+        foreach (var calcPoint in points)
+            barycenter.position += calcPoint.position;
+        barycenter.position /= points.Count;
+        
+        // Add faces from all horizon edges
+        foreach (var edge in horizon)
+        {
+            // Make sure it's build in the right orientation
+            var newFace = new Face() { a = edge.a, b = edge.b, c = point };
+            if (IsVisibleFromPoint(newFace, barycenter))
+                newFace = new Face() { a = edge.a, b = point, c = edge.b };
+            faces.Add(newFace);
+        }
+        
+        // Edges data are now broken, clear it and rebuild it entirely
+        // Any issue should solve itself by this point
+        RebuildEdges();
+    }
 
     // Done by AI to accelerate things, not important for our algorithms anyway
     public Mesh AsMesh()
@@ -112,6 +268,8 @@ public class TetraedraGraph
         faces.Add(new Face() { a = p1, b = p6, c = p2 });
 
         res.faces = faces;
+        
+        res.RebuildEdges();
 
         return res;
     }

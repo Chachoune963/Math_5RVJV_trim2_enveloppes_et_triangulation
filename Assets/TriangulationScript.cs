@@ -5,8 +5,8 @@ using UnityEngine;
 
 public class TriangulationScript : MonoBehaviour
 {
-    [SerializeField] private bool useDelauney;
-    [SerializeField] private bool voronoi;
+    [SerializeField] public bool useDelauney;
+    [SerializeField] public bool voronoi;
     [SerializeField] private MeshFilter meshFilter;
 
     [SerializeField] private GameObject pointsParent;
@@ -338,6 +338,10 @@ public class TriangulationScript : MonoBehaviour
         // Includes the parent, so remove it from the list before moving on
         points.RemoveAt(0);
         
+        // Can't triangulate something that's not even a single triangle
+        if (points.Count < 3)
+            return;
+
         var meshPoints = points
             .Select(p => p.position)
             .ToArray();

@@ -5,8 +5,9 @@ using UnityEngine;
 
 public class EnvelopeScript : MonoBehaviour
 {
-    private enum EnvelopeAlgorithm
+    public enum EnvelopeAlgorithm
     {
+        None,
         Jarvis,
         GrahamScan
     }
@@ -17,6 +18,26 @@ public class EnvelopeScript : MonoBehaviour
 
     [SerializeField] private Transform pointsParent;
 
+    public void SetAlgorithm(EnvelopeAlgorithm algorithm)
+    {
+        switch (algorithm)
+        {
+            case EnvelopeAlgorithm.None:
+                gameObject.SetActive(false);
+                break;
+            
+            case EnvelopeAlgorithm.Jarvis:
+                gameObject.SetActive(true);
+                this.algorithm = EnvelopeAlgorithm.Jarvis;
+                break;
+
+            case EnvelopeAlgorithm.GrahamScan:
+                gameObject.SetActive(true);
+                this.algorithm = EnvelopeAlgorithm.GrahamScan;
+                break;
+        }
+    }
+    
     private float GetAngle(Vector2 v1, Vector2 v2)
     {
         return Mathf.Acos(Vector2.Dot(v1, v2) / (v1.magnitude * v2.magnitude));
@@ -30,8 +51,8 @@ public class EnvelopeScript : MonoBehaviour
         return det >= 0 ? a : 2 * Mathf.PI - a;
     }
 
-    private bool IsConvex(Vector2 p1, Vector2 p2, Vector2 p3)
-        => GetFullAngle(p2 - p1, p2 - p3) > Mathf.PI;
+    private bool IsConvex(Vector2 p1, Vector2 p2, Vector2 p3) 
+        => GetFullAngle(p1 - p2, p3 - p2) > Mathf.PI;
 
     // Returns the indexes of the envelope points, in order
     private List<int> JarvisEnvelope(List<Vector2> jarvisPoints)
@@ -100,22 +121,60 @@ public class EnvelopeScript : MonoBehaviour
 
     private List<int> GrahamScanEnvelope(List<Vector2> scanPoints)
     {
-        Vector2 baryCenter = new Vector2();
-        foreach (var point in scanPoints)
-            baryCenter += point;
-        baryCenter /= scanPoints.Count;
+        // Find point at bottom-left of the points cloud
+        int firstPoint = 0;
+        float xmin = scanPoints[firstPoint].x;
+        float ymin = scanPoints[firstPoint].y;
+        for (int i = 1; i < scanPoints.Count; ++i)
+        {
+            if (scanPoints[i].x < xmin || (Math.Abs(scanPoints[i].x - xmin) < 0.001 && scanPoints[i].y < ymin))
+            {
+                firstPoint = i;
+                xmin = scanPoints[i].x;
+                ymin = scanPoints[i].y;
+            }
+        }
+
+        var anchorPoint = scanPoints[firstPoint];
 
         var indexes = new List<int>();
         for (int i = 0; i < scanPoints.Count; ++i)
             indexes.Add(i);
+        indexes.Remove(firstPoint);
         
+        // Anchor point should be the first point in this list
         var orderedIndexes = indexes
-            .OrderBy(i => GetFullAngle(Vector2.right, (scanPoints[i] - baryCenter).normalized))
+            .OrderBy(i => GetFullAngle(Vector2.down, scanPoints[i] - anchorPoint))
+            .ThenBy(i => (scanPoints[i] - anchorPoint).sqrMagnitude)
             .ToList();
-        
-        // TODO: Pas fais à temps...
+        // Force anchor point into the first position on the list
+        orderedIndexes.Insert(0, firstPoint);
 
-        return new List<int> { 0, 1 };
+        List<int> envelopeStack = new List<int>();
+        envelopeStack.Add(orderedIndexes[0]);
+        envelopeStack.Add(orderedIndexes[1]);
+
+        for (int i = 2; i < orderedIndexes.Count; ++i)
+        {
+            var current = scanPoints[orderedIndexes[i]];
+            var last = scanPoints[envelopeStack[envelopeStack.Count - 1]];
+            var secondLast = scanPoints[envelopeStack[envelopeStack.Count - 2]];
+
+            while (envelopeStack.Count >= 2 && !IsConvex(secondLast, last, current))
+            {
+                envelopeStack.RemoveAt(envelopeStack.Count - 1);
+                
+                if (envelopeStack.Count < 2)
+                    break;
+                
+                last = scanPoints[envelopeStack[envelopeStack.Count - 1]];
+                secondLast = scanPoints[envelopeStack[envelopeStack.Count - 2]];
+            }
+            
+            envelopeStack.Add(orderedIndexes[i]);
+        }
+
+        return envelopeStack;
     }
 
     void Update()
